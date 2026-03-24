@@ -1,0 +1,7 @@
+groq>=0.28.0
+gspread==6.1.2
+google-auth==2.29.0
+requests==2.32.3
+python-dotenv==1.0.1
+PyYAML==6.0.2
+httpx>=0.28.0
