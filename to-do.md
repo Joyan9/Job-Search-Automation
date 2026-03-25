@@ -1,3 +1,3 @@
-- Add the rest of the queries of the queries.yml
+- Add the rest of the queries to the queries.yml ✅
 - Refine the search, there are still cases where senior roles are fetched
 - Can the LLM judge required German level

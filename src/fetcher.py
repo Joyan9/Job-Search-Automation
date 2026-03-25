@@ -17,7 +17,7 @@ from src.config import AppConfig
 logger = logging.getLogger(__name__)
 
 JSEARCH_URL = "https://jsearch.p.rapidapi.com/search"
-REQUEST_DELAY_SECONDS = 1.5  # polite gap between requests
+REQUEST_DELAY_SECONDS = 4.0  # polite gap between requests — JSearch throttles fast bursts
 
 
 @dataclass
@@ -73,29 +73,22 @@ def fetch_jobs(config: AppConfig) -> list[JobPost]:
     for i, search in enumerate(config.searches):
         query = search.get("query", "")
         location = search.get("location", "")
-        #date_posted = search.get("date_posted", "3days")
-
-        # JSearch expects location embedded in the query string, e.g.
-        # "data analyst in Berlin Germany" — not as a separate param
-        full_query = f"{query} in {location}".strip() if location else query
+        country = search.get("country", "de") # defaults to Germany
 
         params = {
-            "query": full_query,
+            "query": query,
             "num_pages": "1",
             "page": "1",
-            "country": "de"
+            "country": country
         }
         logger.debug(f"  Params sent: {params}")
 
-        logger.info(f"[{i+1}/{len(config.searches)}] Fetching: '{full_query}'")
+        logger.info(f"[{i+1}/{len(config.searches)}] Fetching: '{query}'")
 
         try:
-            resp = requests.get(JSEARCH_URL, headers=headers, params=params, timeout=20)
+            resp = requests.get(JSEARCH_URL, headers=headers, params=params, timeout=30)
             resp.raise_for_status()
             data = resp.json()
-            logger.info(f"  Status: {data.get('status')} | Jobs: {len(data.get('data', []))}")
-            if data.get('status') != 'OK':
-                logger.error(f"  Full response: {data}")
         except requests.RequestException as e:
             logger.error(f"Request failed for query '{query}': {e}")
             continue
@@ -111,7 +104,13 @@ def fetch_jobs(config: AppConfig) -> list[JobPost]:
             job = _parse_job(raw)
             if not job.job_id or job.job_id in seen_in_run:
                 continue
+            # Secondary dedup: same title+company slug catches reposts with different IDs
+            title_company_key = f"{job.title.lower().strip()}|{job.company.lower().strip()}"
+            if title_company_key in seen_in_run:
+                logger.debug(f"  Skipping duplicate posting: {job.title} @ {job.company}")
+                continue
             seen_in_run.add(job.job_id)
+            seen_in_run.add(title_company_key)
             all_jobs.append(job)
 
         # Respect rate limits between requests

@@ -5,15 +5,9 @@ Execution order:
   1. Load config
   2. Fetch jobs from JSearch (RapidAPI)
   3. Deduplicate against seen_ids.json
-  4. Score new jobs via Groq LLM
-  5. Append jobs that pass threshold to Google Sheets
+  4. Score new jobs via Groq LLM → (passed, rejected)
+  5. Write passed jobs to "Jobs" tab, rejected to "Rejected" tab
   6. Persist updated seen IDs to disk
-
-Run locally:
-  python main.py
-
-Run in CI:
-  Triggered by GitHub Actions cron (see .github/workflows/daily_fetch.yml)
 """
 
 import logging
@@ -61,14 +55,12 @@ def main() -> None:
         return
 
     # ── Stage 3: Score ─────────────────────────────────────────────────────────
-    scored_jobs = score_jobs(new_jobs, config)
+    passed, rejected = score_jobs(new_jobs, config)
 
     # ── Stage 4: Write to Sheets ───────────────────────────────────────────────
-    written = append_jobs(scored_jobs, config)
+    passed_written, rejected_written = append_jobs(passed, rejected, config)
 
     # ── Stage 5: Persist seen IDs ──────────────────────────────────────────────
-    # Mark ALL fetched jobs as seen, not just the ones that passed.
-    # This prevents re-scoring rejected jobs on the next run.
     new_seen = seen_ids | {j.job_id for j in fetched}
     save_seen_ids(config.seen_ids_path, new_seen)
 
@@ -78,9 +70,8 @@ def main() -> None:
     logger.info(f"Run complete in {elapsed:.1f}s")
     logger.info(f"  Fetched:   {len(fetched)}")
     logger.info(f"  New:       {len(new_jobs)}")
-    logger.info(f"  Scored:    {len(new_jobs)}")
-    logger.info(f"  Passed:    {len(scored_jobs)}")
-    logger.info(f"  Written:   {written}")
+    logger.info(f"  Passed:    {passed_written}  → 'Jobs' tab")
+    logger.info(f"  Rejected:  {rejected_written} → 'Rejected' tab")
     logger.info("=" * 60)
 
 

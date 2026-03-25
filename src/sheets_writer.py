@@ -1,13 +1,9 @@
 """
-sheets_writer.py — appends scored jobs to Google Sheets via service account.
+sheets_writer.py — writes scored jobs to Google Sheets.
 
-Auth uses a service account JSON (stored as GOOGLE_CREDENTIALS_JSON env var).
-The sheet must be shared with the service account email before first run.
-
-Column layout:
-  A: Date Posted  B: Date Added  C: Title  D: Company  E: Location
-  F: Score  G: Summary  H: Title Match  I: Tools Match  J: Seniority Fit
-  K: Concerns  L: Apply Link  M: Source  N: Status (blank — user fills this)
+Two tabs:
+  "Jobs"     — passed jobs (score >= threshold), for morning review
+  "Rejected" — below-threshold jobs, for scorer calibration auditing
 """
 
 import logging
@@ -26,82 +22,80 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-HEADER_ROW = [
-    "Date Posted",
-    "Date Added",
-    "Title",
-    "Company",
-    "Location",
-    "Score",
-    "Summary",
-    "Title Match",
-    "Tools Match",
-    "Seniority Fit",
-    "Concerns",
-    "Apply Link",
-    "Source",
+JOBS_HEADER = [
+    "Date Posted", "Date Added", "Title", "Company", "Location",
+    "Score", "Summary", "Title Match", "Tools Match", "Seniority Fit",
+    "German Required", "German Penalty", "Concerns", "Apply Link", "Source",
     "Status",  # User fills: Apply / Skip / Applied / Rejected
 ]
 
+REJECTED_HEADER = [
+    "Date Posted", "Date Added", "Title", "Company", "Location",
+    "Score", "Seniority Fit", "German Required", "German Penalty",
+    "Concerns", "Summary", "Apply Link",
+]
 
-def _get_worksheet(config: AppConfig) -> gspread.Worksheet:
+
+def _get_or_create_worksheet(spreadsheet: gspread.Spreadsheet, name: str) -> gspread.Worksheet:
+    try:
+        return spreadsheet.worksheet(name)
+    except gspread.WorksheetNotFound:
+        logger.info(f"Sheet '{name}' not found — creating it")
+        return spreadsheet.add_worksheet(title=name, rows=2000, cols=20)
+
+
+def _ensure_header(ws: gspread.Worksheet, header: list[str]) -> None:
+    if ws.row_values(1) != header:
+        ws.insert_row(header, index=1)
+        logger.info(f"Header written to '{ws.title}'")
+
+
+def _get_spreadsheet(config: AppConfig) -> gspread.Spreadsheet:
     creds = Credentials.from_service_account_info(config.google_credentials, scopes=SCOPES)
     client = gspread.authorize(creds)
-    spreadsheet = client.open_by_key(config.spreadsheet_id)
-
-    try:
-        ws = spreadsheet.worksheet(config.sheet_name)
-    except gspread.WorksheetNotFound:
-        logger.info(f"Sheet '{config.sheet_name}' not found — creating it")
-        ws = spreadsheet.add_worksheet(title=config.sheet_name, rows=1000, cols=20)
-
-    return ws
+    return client.open_by_key(config.spreadsheet_id)
 
 
-def _ensure_header(ws: gspread.Worksheet) -> None:
-    """Write header row if the sheet is empty or header is missing."""
-    first_row = ws.row_values(1)
-    if first_row != HEADER_ROW:
-        ws.insert_row(HEADER_ROW, index=1)
-        logger.info("Header row written to sheet")
-
-
-def _scored_job_to_row(scored: ScoredJob) -> list:
+def _to_jobs_row(s: ScoredJob) -> list:
     today = date.today().isoformat()
     return [
-        scored.job.date_posted,
-        today,
-        scored.job.title,
-        scored.job.company,
-        scored.job.location,
-        round(scored.score, 1),
-        scored.summary,
-        scored.title_match,
-        scored.tools_match,
-        scored.seniority_fit,
-        scored.concerns,
-        scored.job.apply_link,
-        scored.job.source,
-        "",  # Status — blank, user fills in
+        s.job.date_posted, today, s.job.title, s.job.company, s.job.location,
+        round(s.score, 1), s.summary, s.title_match, s.tools_match, s.seniority_fit,
+        s.german_required, s.german_penalty, s.concerns, s.job.apply_link, s.job.source,
+        "",  # Status — user fills in
     ]
 
 
-def append_jobs(scored_jobs: list[ScoredJob], config: AppConfig) -> int:
+def _to_rejected_row(s: ScoredJob) -> list:
+    today = date.today().isoformat()
+    return [
+        s.job.date_posted, today, s.job.title, s.job.company, s.job.location,
+        round(s.score, 1), s.seniority_fit, s.german_required, s.german_penalty,
+        s.concerns, s.summary, s.job.apply_link,
+    ]
+
+
+def append_jobs(passed: list[ScoredJob], rejected: list[ScoredJob], config: AppConfig) -> tuple[int, int]:
     """
-    Append all scored jobs to the Google Sheet.
-    Returns the number of rows successfully written.
+    Write passed jobs to the Jobs tab, rejected jobs to the Rejected tab.
+    Returns (passed_written, rejected_written).
     """
-    if not scored_jobs:
-        logger.info("No jobs to write to sheet")
-        return 0
+    spreadsheet = _get_spreadsheet(config)
 
-    ws = _get_worksheet(config)
-    _ensure_header(ws)
+    passed_written = 0
+    if passed:
+        ws = _get_or_create_worksheet(spreadsheet, config.sheet_name)
+        _ensure_header(ws, JOBS_HEADER)
+        ws.append_rows([_to_jobs_row(s) for s in passed], value_input_option="USER_ENTERED")
+        passed_written = len(passed)
+        logger.info(f"Wrote {passed_written} jobs to '{config.sheet_name}'")
 
-    rows = [_scored_job_to_row(s) for s in scored_jobs]
+    rejected_written = 0
+    if rejected:
+        ws = _get_or_create_worksheet(spreadsheet, "Rejected")
+        _ensure_header(ws, REJECTED_HEADER)
+        ws.append_rows([_to_rejected_row(s) for s in rejected], value_input_option="USER_ENTERED")
+        rejected_written = len(rejected)
+        logger.info(f"Wrote {rejected_written} jobs to 'Rejected'")
 
-    # Batch append for efficiency (single API call)
-    ws.append_rows(rows, value_input_option="USER_ENTERED")
-
-    logger.info(f"Wrote {len(rows)} jobs to '{config.sheet_name}' tab")
-    return len(rows)
+    return passed_written, rejected_written
