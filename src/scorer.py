@@ -106,11 +106,12 @@ SCORING RULES — apply in order:
      * b2 → german_penalty: 1.5
      * c1_c2 → german_penalty: 3.0
 
-5. Final score = base score (after seniority adjustment) minus german_penalty. Minimum 0.
+5. Do NOT compute the final score yourself — return only the base_score after seniority adjustment.
+   Python will subtract the german_penalty. Your job is only to assess, not to calculate.
 
 Respond ONLY with a valid JSON object. No markdown, no preamble, no extra text:
 {{
-  "score": <float 0.0-10.0>,
+  "base_score": <float 0.0-10.0 AFTER seniority cap/deduction, BEFORE german_penalty>,
   "title_match": "<one sentence>",
   "tools_match": "<one sentence>",
   "seniority_fit": "<one sentence — state if Senior/Lead cap was applied>",
@@ -126,7 +127,8 @@ Respond ONLY with a valid JSON object. No markdown, no preamble, no extra text:
 @dataclass
 class ScoredJob:
     job: JobPost
-    score: float
+    score: float       # final score = base_score - german_penalty (computed in Python)
+    base_score: float  # raw LLM score before German penalty
     title_match: str
     tools_match: str
     seniority_fit: str
@@ -155,14 +157,21 @@ def _parse_response(raw_text: str, job: JobPost) -> ScoredJob | None:
     try:
         cleaned = raw_text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         data = json.loads(cleaned)
+
+        # LLM returns base_score only — Python applies the german_penalty
+        base_score = float(data.get("base_score") or data.get("score") or 0)
+        german_penalty = float(data.get("german_penalty", 0.0))
+        final_score = round(max(0.0, base_score - german_penalty), 1)
+
         return ScoredJob(
             job=job,
-            score=float(data["score"]),
+            score=final_score,
+            base_score=base_score,
             title_match=data.get("title_match", ""),
             tools_match=data.get("tools_match", ""),
             seniority_fit=data.get("seniority_fit", ""),
             german_required=data.get("german_required", "not_required"),
-            german_penalty=float(data.get("german_penalty", 0.0)),
+            german_penalty=german_penalty,
             location_ok=bool(data.get("location_ok", True)),
             concerns=data.get("concerns", ""),
             summary=data.get("summary", ""),

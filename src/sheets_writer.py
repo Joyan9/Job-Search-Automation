@@ -29,7 +29,7 @@ SCOPES = [
 
 JOBS_HEADER = [
     "Date Posted", "Date Added", "Title", "Company", "Location",
-    "Score", "Summary", "Title Match", "Tools Match", "Seniority Fit",
+    "Score", "Base Score", "Summary", "Title Match", "Tools Match", "Seniority Fit",
     "German Required", "German Penalty", "Concerns", "Apply Link", "Source",
     "Status",  # User fills: Apply / Skip / Applied / Rejected
 ]
@@ -110,7 +110,7 @@ def _to_jobs_row(s: ScoredJob) -> list:
     today = date.today().isoformat()
     return [
         s.job.date_posted, today, s.job.title, s.job.company, s.job.location,
-        round(s.score, 1), s.summary, s.title_match, s.tools_match, s.seniority_fit,
+        round(s.score, 1), round(s.base_score, 1), s.summary, s.title_match, s.tools_match, s.seniority_fit,
         s.german_required, s.german_penalty, s.concerns, s.job.apply_link, s.job.source,
         "",  # Status — user fills in
     ]
