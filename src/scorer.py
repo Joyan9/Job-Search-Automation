@@ -88,18 +88,23 @@ SCORING RULES — apply in order:
    - JD explicitly requires 3+ years → subtract 1.5 (floor at 0).
 
 4. German language penalty:
-   - Candidate level: B1.
-   - YOU MUST output german_required as exactly one of these four values: not_required | b1 | b2 | c1_c2
-     Do NOT write sentences or explanations in this field. Only one of those four strings.
-   - Assessment signals:
-     * JD written in German + client-facing/stakeholder communication mentioned → b2
-     * JD written in German, no communication requirements → b1 (no penalty)
-     * JD written in English → not_required (no penalty)
-     * Explicit C1/C2 or "fließend Deutsch" required → c1_c2
-   - Penalties:
+   - Candidate level: B1. This is a real barrier — assess strictly.
+   - YOU MUST output german_required as exactly one of: not_required | b1 | b2 | c1_c2
+     Do NOT write sentences here. Only one of those four strings.
+   - Assessment rules (apply the STRICTEST matching rule):
+     * JD written entirely in German (90%+ German text) → c1_c2 by default.
+       Exception: downgrade to b2 only if the JD explicitly says "B2 sufficient" or "good German".
+     * JD written in mixed German/English → b2
+     * JD written in English → not_required
+     * Any explicit mention of "fließend", "verhandlungssicher", "C1", "C2",
+       "Muttersprache", "native" in relation to German → c1_c2
+     * Explicit "B2" or "gute Deutschkenntnisse" → b2
+     * Explicit "B1" or "basic German" → b1 (no penalty)
+     * Explicit "no German required" or "English-speaking environment" → not_required
+   - Penalties (these are significant — German is a real barrier at B1):
      * not_required or b1 → german_penalty: 0.0
-     * b2 → german_penalty: 1.0
-     * c1_c2 → german_penalty: 2.0
+     * b2 → german_penalty: 1.5
+     * c1_c2 → german_penalty: 3.0
 
 5. Final score = base score (after seniority adjustment) minus german_penalty. Minimum 0.
 
@@ -110,7 +115,7 @@ Respond ONLY with a valid JSON object. No markdown, no preamble, no extra text:
   "tools_match": "<one sentence>",
   "seniority_fit": "<one sentence — state if Senior/Lead cap was applied>",
   "german_required": "<exactly one of: not_required | b1 | b2 | c1_c2>",
-  "german_penalty": <float — 0.0, 1.0, or 2.0 only>,
+  "german_penalty": <float — must be exactly 0.0, 1.5, or 3.0>,
   "location_ok": <true/false>,
   "concerns": "<one sentence: biggest gap or None>",
   "summary": "<two sentences max: verdict and apply recommendation>"
