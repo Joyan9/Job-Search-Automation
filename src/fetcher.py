@@ -91,6 +91,13 @@ REQUIREMENTS_HEADERS = sorted([
     "Was Sie mitbringen sollten",
     "Ihre Aufgaben",       # tasks section — requirements usually follow immediately
     "Das bringen Sie mit",
+    "Überzeugend – Deine Kenntnisse & Erfahrungen",
+    "Deine Zutaten:",
+    "Was uns überzeugt",
+    "Education & Experience:",
+    "DEINKNOWHOW",
+    "Du …",
+    "Das solltest du an Qualifikationen mitbringen"
 ], key=len, reverse=True)
 
 # Headers that signal the END of requirements (benefits/offer section).

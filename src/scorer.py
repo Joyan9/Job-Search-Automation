@@ -1,15 +1,8 @@
-"""
-scorer.py — scores job fit using Groq LLM (llama-3.3-70b-versatile).
-
-Returns two lists: passed (score >= threshold) and rejected (score < threshold).
-Both are written to Google Sheets — passed to "Jobs", rejected to "Rejected".
-"""
-
 import json
 import logging
 import time
-from dataclasses import dataclass
-
+from typing import Literal, List, Optional
+from pydantic import BaseModel, Field, ValidationError
 from groq import Groq
 
 from src.config import AppConfig
@@ -17,218 +10,123 @@ from src.fetcher import JobPost
 
 logger = logging.getLogger(__name__)
 
-CANDIDATE_PROFILE = """
-Name: Joyan (Data Analyst / Analytics Engineer, Berlin)
+# --- SYSTEM PROMPT: The "Logic & Persona" ---
+SYSTEM_PROMPT = """
+You are a Lead Technical Recruiter specializing in Data & Analytics. 
+Your task is to evaluate Job Descriptions (JDs) against a candidate's profile with 100% objectivity and a "stingy" scoring mindset.
 
-Experience: 2+ years total
-  - DataVinci Analytics Consultancy (consultant, ~2 yrs)
-  - AUTO1 Group (working student)
-  - M.Sc. Computer Science, IU Internationale Hochschule Berlin
+SCORING RUBRIC (Base Score 0-10):
+1. Role Alignment (max 4 pts): 4=Perfect match (Data/Analytics Engineer), 2=Tangential, 0=Non-data (Sales/HR).
+2. Tool Stack (max 4 pts): 1pt each for: SQL, Python, BI (Looker/PowerBI/Tableau), and Modern Data Stack (dbt/BigQuery/GTM).
+3. Experience Fit (max 2 pts): Match for 2 years of experience.
 
-Core tools & skills:
-  SQL, Python, Google Analytics 4 (GA4), Google Tag Manager (GTM),
-  Rudderstack, BigQuery, dbt, Looker Studio, Power BI, Tableau,
-  Metabase, Excel, Google Sheets
+HARD CONSTRAINTS (Apply during reasoning):
+- SENIORITY CAP: If Title has "Senior/Lead/Head/Principal" and JD requires >2 years, the base_score CANNOT exceed 5.0.
+- DOMAIN FILTER: Pure marketing (no SQL/Python) or pure finance roles = max score 3.0.
 
-Target roles (in order of fit):
-  1. Data Analyst
-  2. Analytics Engineer
-  3. Web Analyst
-  4. Business Analyst (data-focused)
-  NOTE: Roles with unusual titles (e.g. "Insights Analyst", "Marketing Data Analyst",
-  "Digital Analytics Specialist") should be treated as target roles if the core work
-  is data analysis or analytics engineering.
-
-Location: Open to all work setups (remote/hybrid/onsite) across Germany.
-
-German language level: B1 (conversational, not fluent).
-
-Seniority:
-  - HARD CAP: Any title containing Senior / Lead / Head / Principal / Staff → score CANNOT exceed 5.0.
-    Exception: only exceed 5.0 if the JD explicitly says "junior welcome" or "0-2 years".
-  - 3+ years explicitly required → subtract 1.5 from base score (min 0).
-  - 1-2 years required or not mentioned → no penalty.
+GERMAN LANGUAGE CLASSIFICATION:
+- 'not_required': JD is English-only.
+- 'b1': Basic/Conversational mentioned.
+- 'b2': Mixed German/English or "Good German".
+- 'c1_c2': Entirely German JD or "Fluency/Verhandlungssicher".
 """
 
-SCORING_PROMPT_TEMPLATE = """
-You are a strict recruiter evaluating job-candidate fit. Apply all scoring rules exactly as written.
-
+# --- USER PROMPT TEMPLATE: The "Data" ---
+USER_PROMPT_TEMPLATE = """
 CANDIDATE PROFILE:
-{profile}
+- Experience: 2 years (Consultancy & Working Student)
+- Tools: SQL, Python, GA4, GTM, dbt, BigQuery, Looker Studio, Power BI
+- Target: Data Analyst, Analytics Engineer, Web Analyst
+- German: B1 (Conversational)
 
 JOB LISTING:
-Title: {title}
-Company: {company}
-Location: {location}
-Employment Type: {employment_type}
-
-Description (truncated to {max_chars} chars):
+Title: {title} | Company: {company} | Location: {location}
+Description:
 {description}
 
----
-
-SCORING RULES — apply in order:
-
-1. DOMAIN FILTER (apply first — discard non-data roles immediately):
-   - The candidate is a data/analytics professional. Roles must involve working with data.
-   - Pure marketing strategy, market research (no data tools), sales, or finance roles → score 3 or below.
-   - "Marketing Analyst" is only acceptable if the JD explicitly mentions data tools (SQL, GA4, Python, BI tools).
-     If it is a traditional marketing role with no data tools → score ≤ 3.
-
-2. Base score (0-10) based on role and tool fit:
-   - 9-10: Title matches perfectly (Data Analyst / Analytics Engineer / Web Analyst), tools align
-   - 7-8:  Good fit, role is clearly data-focused, minor gaps
-   - 5-6:  Moderate fit, some relevant work but notable gaps
-   - 3-4:  Weak fit, tangential to data analytics
-   - 0-2:  Wrong domain (pure marketing, sales, finance, HR)
-
-3. Seniority adjustment (apply BEFORE German penalty):
-   - Title contains Senior / Lead / Head / Principal / Staff → cap score at 5.0 maximum.
-     Only exception: JD explicitly says "junior welcome" or requires ≤ 2 years.
-   - JD explicitly requires 3+ years → subtract 1.5 (floor at 0).
-
-4. German language penalty:
-   - Candidate level: B1. This is a real barrier — assess strictly.
-   - YOU MUST output german_required as exactly one of: not_required | b1 | b2 | c1_c2
-     Do NOT write sentences here. Only one of those four strings.
-   - Assessment rules (apply the STRICTEST matching rule):
-     * JD written entirely in German (90%+ German text) → c1_c2 by default.
-       Exception: downgrade to b2 only if the JD explicitly says "B2 sufficient" or "good German".
-     * JD written in mixed German/English → b2
-     * JD written in English → not_required
-     * Any explicit mention of "fließend", "verhandlungssicher", "C1", "C2",
-       "Muttersprache", "native" in relation to German → c1_c2
-     * Explicit "B2" or "gute Deutschkenntnisse" → b2
-     * Explicit "B1" or "basic German" → b1 (no penalty)
-     * Explicit "no German required" or "English-speaking environment" → not_required
-   - Penalties (these are significant — German is a real barrier at B1):
-     * not_required or b1 → german_penalty: 0.0
-     * b2 → german_penalty: 1.5
-     * c1_c2 → german_penalty: 3.0
-
-5. Do NOT compute the final score yourself — return only the base_score after seniority adjustment.
-   Python will subtract the german_penalty. Your job is only to assess, not to calculate.
-
-Respond ONLY with a valid JSON object. No markdown, no preamble, no extra text:
+Return ONLY a JSON object:
 {{
-  "base_score": <float 0.0-10.0 AFTER seniority cap/deduction, BEFORE german_penalty>,
-  "title_match": "<one sentence>",
-  "tools_match": "<one sentence>",
-  "seniority_fit": "<one sentence — state if Senior/Lead cap was applied>",
-  "german_required": "<exactly one of: not_required | b1 | b2 | c1_c2>",
-  "german_penalty": <float — must be exactly 0.0, 1.5, or 3.0>,
-  "location_ok": <true/false>,
-  "concerns": "<one sentence: biggest gap or None>",
-  "summary": "<two sentences max: verdict and apply recommendation>"
+  "reasoning": "Brief step-by-step logic for score and language choice",
+  "base_score": <float 0-10>,
+  "german_required": "not_required|b1|b2|c1_c2",
+  "seniority_cap_applied": <bool>,
+  "tools_found": [<list of matching tools>],
+  "concerns": "Biggest gap or None"
 }}
 """
 
+class ScoredJobResponse(BaseModel):
+    """Schema for LLM response validation."""
+    reasoning: str
+    base_score: float = Field(ge=0, le=10)
+    german_required: Literal["not_required", "b1", "b2", "c1_c2"]
+    seniority_cap_applied: bool
+    tools_found: List[str]
+    concerns: Optional[str]
 
-@dataclass
 class ScoredJob:
-    job: JobPost
-    score: float       # final score = base_score - german_penalty (computed in Python)
-    base_score: float  # raw LLM score before German penalty
-    title_match: str
-    tools_match: str
-    seniority_fit: str
-    german_required: str
-    german_penalty: float
-    location_ok: bool
-    concerns: str
-    summary: str
-    passed: bool  # True if score >= threshold
+    """The final object used by the application."""
+    def __init__(self, job: JobPost, llm_data: ScoredJobResponse, threshold: float):
+        self.job = job
+        self.base_score = llm_data.base_score
+        self.german_required = llm_data.german_required
+        
+        # Calculate Penalty in Python (LLMs are bad at math)
+        penalties = {"not_required": 0.0, "b1": 0.0, "b2": 1.5, "c1_c2": 3.0}
+        self.german_penalty = penalties.get(llm_data.german_required, 0.0)
+        
+        # Final calculation
+        self.score = round(max(0.0, self.base_score - self.german_penalty), 1)
+        self.passed = self.score >= threshold
+        
+        # Metadata
+        self.summary = f"Match: {llm_data.base_score} - Penalty: {self.german_penalty} | {llm_data.reasoning}"
+        self.concerns = llm_data.concerns
 
-
-def _build_prompt(job: JobPost, config: AppConfig) -> str:
-    description = job.description[: config.max_description_chars]
-    return SCORING_PROMPT_TEMPLATE.format(
-        profile=CANDIDATE_PROFILE,
-        title=job.title,
-        company=job.company,
-        location=job.location,
-        employment_type=job.employment_type,
-        description=description,
-        max_chars=config.max_description_chars,
-    )
-
-
-def _parse_response(raw_text: str, job: JobPost) -> ScoredJob | None:
-    try:
-        cleaned = raw_text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-        data = json.loads(cleaned)
-
-        # LLM returns base_score only — Python applies the german_penalty
-        base_score = float(data.get("base_score") or data.get("score") or 0)
-        german_penalty = float(data.get("german_penalty", 0.0))
-        final_score = round(max(0.0, base_score - german_penalty), 1)
-
-        return ScoredJob(
-            job=job,
-            score=final_score,
-            base_score=base_score,
-            title_match=data.get("title_match", ""),
-            tools_match=data.get("tools_match", ""),
-            seniority_fit=data.get("seniority_fit", ""),
-            german_required=data.get("german_required", "not_required"),
-            german_penalty=german_penalty,
-            location_ok=bool(data.get("location_ok", True)),
-            concerns=data.get("concerns", ""),
-            summary=data.get("summary", ""),
-            passed=False,  # set below
-        )
-    except (json.JSONDecodeError, KeyError, ValueError) as e:
-        logger.warning(f"Failed to parse LLM response for '{job.title}': {e}")
-        logger.debug(f"Raw response: {raw_text[:300]}")
-        return None
-
-
-def score_jobs(
-    jobs: list[JobPost], config: AppConfig
-) -> tuple[list[ScoredJob], list[ScoredJob]]:
-    """
-    Score all jobs. Returns (passed, rejected) tuple.
-    Both lists contain ScoredJob objects — caller decides where to write them.
-    """
+def score_jobs(jobs: List[JobPost], config: AppConfig) -> tuple[List[ScoredJob], List[ScoredJob]]:
     client = Groq(api_key=config.groq_api_key)
-    passed: list[ScoredJob] = []
-    rejected: list[ScoredJob] = []
-    total = len(jobs)
+    passed, rejected = [], []
 
     for i, job in enumerate(jobs):
-        logger.info(f"[{i+1}/{total}] Scoring: '{job.title}' at {job.company}")
+        logger.info(f"[{i+1}/{len(jobs)}] Evaluating {job.title} @ {job.company}")
 
-        prompt = _build_prompt(job, config)
         try:
-            response = client.chat.completions.create(
-                model=config.groq_model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=config.groq_temperature,
-                max_tokens=500,
+            # We focus the description on the first 4000 chars to save tokens 
+            # while keeping core requirements intact.
+            prompt = USER_PROMPT_TEMPLATE.format(
+                title=job.title,
+                company=job.company,
+                location=job.location,
+                description=job.description[:4000]
             )
-            raw_text = response.choices[0].message.content or ""
+
+            completion = client.chat.completions.create(
+                model=config.groq_model,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.1, # Low temperature for consistent scoring
+                response_format={"type": "json_object"}
+            )
+
+            # Parse and Validate
+            raw_content = completion.choices[0].message.content
+            response_data = ScoredJobResponse.model_validate_json(raw_content)
+            
+            scored = ScoredJob(job, response_data, config.score_threshold)
+
+            if scored.passed:
+                passed.append(scored)
+                logger.info(f"  ✓ PASSED: {scored.score}")
+            else:
+                rejected.append(scored)
+                logger.info(f"  ✗ REJECTED: {scored.score} (Req: {scored.german_required})")
+
         except Exception as e:
-            logger.error(f"Groq API error for '{job.title}': {e}")
-            time.sleep(2)
+            logger.error(f"  ! Error scoring {job.title}: {str(e)}")
             continue
+        
+        time.sleep(1.5) # Rate limit safety
 
-        scored = _parse_response(raw_text, job)
-        if scored is None:
-            continue
-
-        german_note = f" | DE:{scored.german_required} (-{scored.german_penalty})" if scored.german_penalty > 0 else ""
-        logger.info(f"  → Score: {scored.score:.1f}{german_note} | {scored.summary[:70]}")
-
-        if scored.score >= config.score_threshold:
-            scored.passed = True
-            passed.append(scored)
-            logger.info(f"  ✓ Passed threshold ({config.score_threshold})")
-        else:
-            scored.passed = False
-            rejected.append(scored)
-            logger.info(f"  ✗ Below threshold — rejected")
-
-        time.sleep(2.0)  # 30 TPM budget: 2s gap keeps bursts under 30K TPM
-
-    logger.info(f"Scoring complete — {len(passed)} passed, {len(rejected)} rejected out of {total}")
     return passed, rejected
