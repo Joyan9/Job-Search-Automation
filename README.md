@@ -53,6 +53,48 @@ GitHub Actions (cron 06:30 CET)
     (Apply / Skip / Archive)
 ```
 
+## Script roles and workflow
+
+1. `src/config.py`
+   - Loads `config/queries.yaml`, environment variables from `.env`, and assembles an `AppConfig` dataclass.
+   - Enforces required secrets (`RAPIDAPI_KEY`, `GROQ_API_KEY`, `SPREADSHEET_ID`, `GOOGLE_CREDENTIALS_JSON`).
+   - Central single source of truth for settings in the pipeline.
+
+2. `src/fetcher.py`
+   - Queries JSearch (RapidAPI) for each search term in `config/queries.yaml`.
+   - Normalises responses into `JobPost` objects and extracts high-value JD text for scoring.
+   - Implements duplicate filtering within one run (same ID or title/company combo) and respects request delay.
+
+3. `src/deduplicator.py`
+   - Loads existing job IDs from `data/seen_ids.json`.
+   - Filters out previously processed jobs to avoid repeated scoring.
+   - Saves updated `seen_ids.json` at the end of each run.
+
+4. `src/scorer.py`
+   - Sends each new job to Groq with a structured system/user prompt.
+   - Validates response JSON against `ScoredJobResponse` Pydantic model.
+   - Applies German proficiency penalty and threshold logic to derive `ScoredJob.score` and pass/fail status.
+
+5. `src/sheets_writer.py`
+   - Connects to Google Sheets via service account JSON.
+   - Ensures `Jobs` and `Rejected` sheets exist and have headers.
+   - Appends passed and rejected jobs as rows (with retry/grid expansion logic).
+
+6. `main.py`
+   - Orchestrates the full pipeline: config → fetch → dedupe → score → write → persist.
+   - Logs a concise run summary and metrics for visibility.
+
+### Workflow connections
+
+- `main.py` starts by calling `load_config()` from `src/config.py`.
+- `fetch_jobs(config)` pulls raw listings and structures them, then returns to `main`.
+- `load_seen_ids()` and `filter_new_jobs()` ensure only fresh jobs go to scoring.
+- `score_jobs(new_jobs, config)` evaluates each new job and partitions to passed/rejected.
+- `append_jobs(passed, rejected, config)` writes outcomes to the spreadsheet.
+- Finally, `save_seen_ids()` persists all fetched job IDs (not only passed) to avoid reprocessing.
+
+**Result:** the pipeline always fetches the latest listings, dedups what you already reviewed, scores relevance automatically, and updates Google Sheets for quick daily decisioning.
+
 **Request budget:** 5 queries/day × 22 weekdays = ~110 requests/month (200/month cap on RapidAPI free tier)
 
 ---
@@ -173,22 +215,37 @@ settings:
 
 ## Google Sheet columns
 
+### Jobs sheet
+
 | Column | Content |
 |---|---|
-| A | Date job was posted |
-| B | Date pipeline added it |
-| C | Job title |
-| D | Company |
-| E | Location |
-| F | **Score (0–10)** |
-| G | LLM summary + verdict |
-| H | Title match reasoning |
-| I | Tools match reasoning |
-| J | Seniority fit |
-| K | Concerns / gaps |
-| L | Apply link |
-| M | Source (LinkedIn, Indeed…) |
-| N | **Status** ← you fill this in |
+| A | Date Added |
+| B | Title |
+| C | Company |
+| D | Location |
+| E | Score |
+| F | Base Score |
+| G | German Req |
+| H | Penalty |
+| I | Tools Found |
+| J | Concerns |
+| K | Summary/Reasoning |
+| L | Apply Link |
+| M | Source |
+| N | Status |
+
+### Rejected sheet
+
+| Column | Content |
+|---|---|
+| A | Date Added |
+| B | Title |
+| C | Company |
+| D | Score |
+| E | German Req |
+| F | Concerns |
+| G | Summary/Reasoning |
+| H | Apply Link |
 
 ---
 
@@ -208,4 +265,4 @@ Groq's free tier is generous enough to score 50+ jobs/day with no cost, and llam
 ## Author
 
 Joyan — Data Analyst & Analytics Engineer, Berlin  
-[LinkedIn](https://linkedin.com/in/YOUR_PROFILE) · [GitHub](https://github.com/YOUR_USERNAME) · [Medium](https://medium.com/@YOUR_HANDLE)
+[LinkedIn](https://www.linkedin.com/in/joyan-bhathena/)
