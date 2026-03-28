@@ -97,7 +97,8 @@ REQUIREMENTS_HEADERS = sorted([
     "Education & Experience:",
     "DEINKNOWHOW",
     "Du …",
-    "Das solltest du an Qualifikationen mitbringen"
+    "Das solltest du an Qualifikationen mitbringen",
+    "Das Bist Du",
 ], key=len, reverse=True)
 
 # Headers that signal the END of requirements (benefits/offer section).

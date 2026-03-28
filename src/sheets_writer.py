@@ -92,9 +92,16 @@ def _write_rows(ws: gspread.Worksheet, rows: List[List]) -> None:
     if not rows:
         return
 
-    # 1. Find where to start writing
-    existing = ws.get_all_values()
-    next_row = len(existing) + 1
+    # 1. Find the last row with data by checking column A
+    all_values = ws.col_values(1)  # Get all values in first column
+    
+    # Find the last non-empty cell by iterating backward
+    next_row = 1
+    for i in range(len(all_values) - 1, -1, -1):
+        if all_values[i].strip():  # If cell is not empty
+            next_row = i + 2  # +1 for 0-indexing, +1 for next row
+            break
+    
     num_new_rows = len(rows)
     required_rows = next_row + num_new_rows - 1
 
