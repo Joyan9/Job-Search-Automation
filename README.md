@@ -2,8 +2,6 @@
 
 An automated daily job scraping and AI scoring pipeline built to surface the most relevant data analyst and analytics engineering roles across Germany — and eliminate the noise.
 
-[![Daily Job Fetch](https://github.com/YOUR_USERNAME/job-pipeline/actions/workflows/daily_fetch.yml/badge.svg)](https://github.com/YOUR_USERNAME/job-pipeline/actions/workflows/daily_fetch.yml)
-
 ---
 
 ## What it does
@@ -109,6 +107,18 @@ GitHub Actions (cron 06:30 CET)
 | Output | Google Sheets (gspread + service account) |
 | Language | Python 3.11 |
 | State persistence | JSON file committed to repo |
+
+---
+
+## Design decisions
+
+- Decision: pass only extracted requirements text to the LLM for scoring. This reduces token usage and focuses scoring on hard skill alignment, minimizing noise from non-essential JD content.
+- Decision: use a curated list of common “requirements” section headers (`Requirements`, `Qualifications`, `What you need`, etc.) when extracting requirements from complete JD text. Jobs without a recognized header are logged for manual review so coverage improves over time.
+- Decision: do not discard jobs below threshold; write them to a secondary tab (`Rejected`) instead. This enables auditability and ensures the LLM’s filtering behavior is easily validated and tuned.
+- Decision: split prompts into system and user roles. The system prompt sets persona/task context (LLM role as job-candidate matcher), while the user prompt provides candidate profile + job requirements + desired return format. This separation improves consistency and result quality.
+- Decision: request reasoning before final scores in the prompt. Having the LLM output score components plus reasoning creates a transparent chain-of-thought and strengthens alignment.
+- Decision: represent LLM output with a validated data class (Pydantic model) for robust structure checks, guard rails, and early error detection.
+- Decision: compute the final score in Python from component values (instead of asking LLM to calculate). This saves tokens and eliminates arithmetic inconsistencies from the model.
 
 ---
 
