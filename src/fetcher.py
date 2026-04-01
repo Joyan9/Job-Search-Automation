@@ -1,7 +1,7 @@
 """
-fetcher.py — pulls job listings from JSearch (RapidAPI).
+fetcher.py — pulls job listings from multiple JSearch APIs (RapidAPI).
 
-Each search query = 1 API request. All queries defined in config/queries.yaml.
+Each search query calls multiple API endpoints (original JSearch, JSearch Mega) to fetch more results. All queries defined in config/queries.yaml.
 Results are normalised into a consistent JobPost dataclass before being
 passed downstream — nothing else in the pipeline knows about the raw API shape.
 
@@ -18,6 +18,7 @@ import json
 import re
 from pathlib import Path
 import time
+import os
 from dataclasses import dataclass
 
 import requests
@@ -99,6 +100,11 @@ REQUIREMENTS_HEADERS = sorted([
     "Du …",
     "Das solltest du an Qualifikationen mitbringen",
     "Das Bist Du",
+    "Was solltest du mitbringen?",
+    "Was bringen Sie mit?",
+    "DAS MACHT DICH ZUM NACHVORNESCHAUER",
+    "Dein Qualifikationsprofil",
+    "Du hast/Du bist:",
 ], key=len, reverse=True)
 
 # Headers that signal the END of requirements (benefits/offer section).
@@ -125,6 +131,19 @@ def _log_unmatched_jd(full_text: str) -> None:
     UNMATCHED_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(UNMATCHED_LOG_PATH, "a", encoding="utf-8") as f:
         f.write(json.dumps({"jd": full_text}, ensure_ascii=False) + "\n")
+
+
+def _log_no_results(api_name: str, query: str) -> None:
+    """Log API calls with no results."""
+    path = Path(__file__).parent.parent / "data" / "no_result_api_calls.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "api": api_name,
+        "query": query,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+    }
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
 
@@ -221,13 +240,26 @@ def fetch_jobs(config: AppConfig) -> list[JobPost]:
     Run all configured search queries and return deduplicated JobPost list.
     Uses a job_id set to drop duplicates across queries within the same run.
     """
-    headers = {
-        "X-RapidAPI-Key": config.rapidapi_key,
-        "X-RapidAPI-Host": "jsearch.p.rapidapi.com",
-    }
-
     all_jobs: list[JobPost] = []
     seen_in_run: set[str] = set()
+    api_key = os.environ.get("RAPIDAPI_KEY")
+
+    apis = [
+        {
+            "name": "original",
+            "url": JSEARCH_URL,
+            "key": api_key,
+            "page": "1",
+            "host": "jsearch.p.rapidapi.com"
+        },
+        {
+            "name": "jsearch-mega",
+            "url": "https://jsearch-mega.p.rapidapi.com/search",
+            "key": api_key,
+            "page": "2",
+            "host": "jsearch-mega.p.rapidapi.com"
+        }
+    ]
 
     for i, search in enumerate(config.searches):
         query = search.get("query", "")
@@ -235,44 +267,59 @@ def fetch_jobs(config: AppConfig) -> list[JobPost]:
 
         full_query = f"{query} in {location}".strip() if location else query
 
-        params = {
-            "query": full_query,
-            "num_pages": "1",
-            "page": "1",
-            "country": "de",
-            # date_posted omitted: unreliable on non-US indexes, dedup handles reruns
-        }
-
-        logger.info(f"[{i+1}/{len(config.searches)}] Fetching: '{full_query}'")
-
-        try:
-            resp = requests.get(JSEARCH_URL, headers=headers, params=params, timeout=30)
-            resp.raise_for_status()
-            data = resp.json()
-        except requests.RequestException as e:
-            logger.error(f"Request failed for query '{query}': {e}")
-            continue
-
-        if data.get("status") != "OK":
-            logger.warning(f"  API non-OK: {data.get('status')} — {data.get('message', '')}")
-
-        raw_jobs = data.get("data", [])
-        logger.info(f"  Status: OK | Jobs: {len(raw_jobs)}")
-
-        for raw in raw_jobs:
-            job = _parse_job(raw)
-            if not job.job_id or job.job_id in seen_in_run:
+        for api in apis:
+            if not api["key"]:
+                logger.warning(f"API key not set for {api['name']}, skipping")
                 continue
-            title_company_key = f"{job.title.lower().strip()}|{job.company.lower().strip()}"
-            if title_company_key in seen_in_run:
-                logger.debug(f"  Skipping duplicate: {job.title} @ {job.company}")
+
+            params = {
+                "query": full_query,
+                "num_pages": "1",
+                "page": api["page"],
+                "country": "de",
+            }
+
+            headers = {
+                "X-RapidAPI-Key": api["key"],
+                "X-RapidAPI-Host": api["host"],
+            }
+
+            logger.info(f"[{i+1}/{len(config.searches)}] Fetching from {api['name']}: '{full_query}' page {api['page']}")
+
+            try:
+                resp = requests.get(api["url"], headers=headers, params=params, timeout=30)
+                resp.raise_for_status()
+                data = resp.json()
+            except requests.RequestException as e:
+                logger.error(f"Request failed for {api['name']} query '{full_query}': {e}")
                 continue
-            seen_in_run.add(job.job_id)
-            seen_in_run.add(title_company_key)
-            all_jobs.append(job)
+
+            if data.get("status") != "OK":
+                logger.warning(f"  {api['name']} API non-OK: {data.get('status')} — {data.get('message', '')}")
+                continue
+
+            raw_jobs = data.get("data", [])
+            if not raw_jobs:
+                logger.info(f"  {api['name']} Status: OK | Jobs: 0")
+                _log_no_results(api["name"], full_query)
+                continue
+
+            logger.info(f"  {api['name']} Status: OK | Jobs: {len(raw_jobs)}")
+
+            for raw in raw_jobs:
+                job = _parse_job(raw)
+                if not job.job_id or job.job_id in seen_in_run:
+                    continue
+                title_company_key = f"{job.title.lower().strip()}|{job.company.lower().strip()}"
+                if title_company_key in seen_in_run:
+                    logger.debug(f"  Skipping duplicate: {job.title} @ {job.company}")
+                    continue
+                seen_in_run.add(job.job_id)
+                seen_in_run.add(title_company_key)
+                all_jobs.append(job)
 
         if i < len(config.searches) - 1:
             time.sleep(REQUEST_DELAY_SECONDS)
 
-    logger.info(f"Fetch complete — {len(all_jobs)} unique jobs across all queries")
+    logger.info(f"Fetch complete — {len(all_jobs)} unique jobs across all queries and APIs")
     return all_jobs

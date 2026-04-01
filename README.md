@@ -11,7 +11,7 @@ https://www.loom.com/share/ce7214d173224063a2ae51292c4619c5
 
 Every weekday morning, the pipeline:
 
-1. **Fetches** fresh job listings from LinkedIn, Indeed, Glassdoor, and more via the JSearch API (aggregated, no scraping)
+1. **Fetches** fresh job listings from LinkedIn, Indeed, Glassdoor, and more via multiple JSearch APIs (aggregated, no scraping)
 2. **Deduplicates** against previously seen jobs so each listing is only scored once
 3. **Scores** each job on a 0–10 scale using an LLM (Groq / llama-3.3-70b-versatile) against a detailed candidate profile — title fit, tool overlap, seniority match
 4. **Appends** only jobs above the threshold to a shared Google Sheet for morning review
@@ -27,7 +27,7 @@ GitHub Actions (cron 06:30 CET)
         │
         ▼
 ┌─────────────────────┐
-│   Job Fetcher       │  JSearch (RapidAPI) — 5 queries/day, 10 results each
+│   Job Fetcher       │  Multiple JSearch APIs (RapidAPI) — 5 queries/day, multiple pages per query
 │   fetcher.py        │  LinkedIn · Indeed · Glassdoor · StepStone · more
 └────────┬────────────┘
          │ up to 50 raw jobs/day
