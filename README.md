@@ -6,6 +6,9 @@ An automated daily job scraping and AI scoring pipeline built to surface the mos
 
 ## What it does
 
+https://www.loom.com/share/ce7214d173224063a2ae51292c4619c5
+
+
 Every weekday morning, the pipeline:
 
 1. **Fetches** fresh job listings from LinkedIn, Indeed, Glassdoor, and more via the JSearch API (aggregated, no scraping)
