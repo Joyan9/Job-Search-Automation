@@ -110,15 +110,24 @@ GitHub Actions (cron 06:30 CET)
 
 ---
 
-## Design decisions
+## Design Decisions
 
-- Decision: pass only extracted requirements text to the LLM for scoring. This reduces token usage and focuses scoring on hard skill alignment, minimizing noise from non-essential JD content.
-- Decision: use a curated list of common “requirements” section headers (`Requirements`, `Qualifications`, `What you need`, etc.) when extracting requirements from complete JD text. Jobs without a recognized header are logged for manual review so coverage improves over time.
-- Decision: do not discard jobs below threshold; write them to a secondary tab (`Rejected`) instead. This enables auditability and ensures the LLM’s filtering behavior is easily validated and tuned.
-- Decision: split prompts into system and user roles. The system prompt sets persona/task context (LLM role as job-candidate matcher), while the user prompt provides candidate profile + job requirements + desired return format. This separation improves consistency and result quality.
-- Decision: request reasoning before final scores in the prompt. Having the LLM output score components plus reasoning creates a transparent chain-of-thought and strengthens alignment.
-- Decision: represent LLM output with a validated data class (Pydantic model) for robust structure checks, guard rails, and early error detection.
-- Decision: compute the final score in Python from component values (instead of asking LLM to calculate). This saves tokens and eliminates arithmetic inconsistencies from the model.
+To ensure the system remains cost-effective, auditable, and technically robust, the following architectural choices were made:
+
+### Data Sourcing & Persistence
+* **3rd Party API over Custom Scraping:** To avoid the constant maintenance required to bypass LinkedIn and Indeed’s anti-scraping measures, we use **JSearch**. This provides reliable, aggregated access to multiple boards. Queries are highly optimized to maximize the "signal" received within API rate limits.
+* **Git-Based State Management:** We use a `seen_ids.json` file committed directly to the repository to track processed jobs. This allows **GitHub Actions** to maintain state across runs without the need for external database infrastructure.
+
+### LLM Strategy & Prompt Engineering
+* **Cost-Efficient Inference:** We utilize **Groq** to leverage its generous free tier and high-speed inference. The system remains model-agnostic, allowing for easy transitions via `queries.yaml`.
+* **Focused Context Window:** Only extracted requirements text is passed to the LLM. By using a curated list of common headers (e.g., *Qualifications*, *What you need*), we minimize token noise and focus scoring strictly on hard-skill alignment.
+* **Role Separation:** Prompts are split into **System** (persona and task constraints) and **User** (candidate profile and JD content) roles. This structure improves instruction following and output consistency.
+* **Chain-of-Thought Reasoning:** The prompt requires the LLM to output reasoning *before* providing final scores. This forces a transparent "chain-of-thought" that improves the quality of the evaluation.
+
+### Engineering & Validation
+* **Calculated vs. Generative Scoring:** To eliminate LLM arithmetic errors and save tokens, the LLM provides raw component values while **Python handles the final score calculation**.
+* **Structured Data Integrity:** We use **Pydantic models** to validate LLM outputs. This ensures the data adheres to a strict schema and provides a robust guardrail against hallucinations or malformed JSON.
+* **Non-Destructive Filtering:** Jobs falling below the scoring threshold are moved to a **"Rejected" tab** rather than being deleted. This enables manual auditing to fine-tune the LLM’s filtering logic over time.
 
 ---
 
@@ -259,20 +268,6 @@ settings:
 
 ---
 
-## Design decisions
-
-**Why JSearch instead of scraping?**
-LinkedIn and Indeed aggressively block scrapers and change their HTML frequently. JSearch is a maintained aggregator that hits multiple job boards reliably. It counts against a monthly API cap, so queries are designed to maximise signal per request.
-
-**Why commit seen_ids.json to the repo?**
-A persistent store without a database. The GitHub Actions workflow commits the updated file back after each run. This means the state survives across runs, is version-controlled, and requires zero infrastructure beyond the repo.
-
-**Why Groq instead of OpenAI?**
-Groq's free tier is generous enough to score 50+ jobs/day with no cost, and llama-3.3-70b-versatile produces high-quality structured JSON when prompted correctly. The scorer module is model-agnostic — swap the model string in `queries.yaml` to switch.
-
----
-
 ## Author
 
-Joyan — Data Analyst & Analytics Engineer, Berlin  
-[LinkedIn](https://www.linkedin.com/in/joyan-bhathena/)
+Joyan — [LinkedIn](https://www.linkedin.com/in/joyan-bhathena/)
