@@ -40,11 +40,11 @@ jobs:
           LOG_LEVEL: INFO
         run: python main.py
 
-      - name: Commit updated seen_ids.json
+      - name: Commit updated tracking files
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/seen_ids.json
-          # Only commit if the file actually changed
-          git diff --staged --quiet || git commit -m "chore: update seen_ids.json [skip ci]"
+          git add data/seen_ids.json data/unmatched_jds.jsonl
+          # Only commit if either file actually changed
+          git diff --staged --quiet || git commit -m "chore: update tracking files [skip ci]"
           git push
