@@ -15,7 +15,12 @@ import sys
 from datetime import datetime
 
 from src.config import load_config
-from src.deduplicator import filter_new_jobs, load_seen_ids, save_seen_ids
+from src.deduplicator import (
+    filter_new_jobs,
+    load_seen_state,
+    save_seen_state,
+    update_fingerprints,
+)
 from src.fetcher import fetch_jobs
 from src.scorer import score_jobs
 from src.sheets_writer import append_jobs
@@ -48,10 +53,16 @@ def main() -> None:
         return
 
     # ── Stage 2: Deduplicate ───────────────────────────────────────────────────
-    seen_ids = load_seen_ids(config.seen_ids_path)
-    new_jobs = filter_new_jobs(fetched, seen_ids)
+    seen_ids, seen_fingerprints = load_seen_state(config.seen_ids_path)
+    new_jobs, dedup_stats = filter_new_jobs(
+        fetched,
+        seen_ids,
+        seen_fingerprints,
+        config.max_job_age_days,
+        config.repost_cooldown_days,
+    )
     if not new_jobs:
-        logger.info("All fetched jobs already seen — nothing to score")
+        logger.info("No eligible jobs after dedup/freshness filtering — nothing to score")
         return
 
     # ── Stage 3: Score ─────────────────────────────────────────────────────────
@@ -62,13 +73,17 @@ def main() -> None:
 
     # ── Stage 5: Persist seen IDs ──────────────────────────────────────────────
     new_seen = seen_ids | {j.job_id for j in fetched}
-    save_seen_ids(config.seen_ids_path, new_seen)
+    new_fingerprints = update_fingerprints(fetched, seen_fingerprints)
+    save_seen_state(config.seen_ids_path, new_seen, new_fingerprints)
 
     # ── Summary ────────────────────────────────────────────────────────────────
     elapsed = (datetime.now() - run_start).total_seconds()
     logger.info("=" * 60)
     logger.info(f"Run complete in {elapsed:.1f}s")
     logger.info(f"  Fetched:   {len(fetched)}")
+    logger.info(f"  Seen-ID skipped: {dedup_stats.seen_id_skipped}")
+    logger.info(f"  Stale skipped:   {dedup_stats.stale_skipped}")
+    logger.info(f"  Repost skipped:  {dedup_stats.repost_skipped}")
     logger.info(f"  New:       {len(new_jobs)}")
     logger.info(f"  Passed:    {passed_written}  → 'Jobs' tab")
     logger.info(f"  Rejected:  {rejected_written} → 'Rejected' tab")

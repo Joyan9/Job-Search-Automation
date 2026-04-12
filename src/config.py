@@ -57,8 +57,11 @@ class AppConfig:
     results_per_query: int
     score_threshold: float
     groq_model: str
+    consensus_models: list[str]
     groq_temperature: float
     max_description_chars: int
+    max_job_age_days: int
+    repost_cooldown_days: int
 
     # Misc
     log_level: str
@@ -85,8 +88,11 @@ def load_config() -> AppConfig:
         results_per_query=settings.get("results_per_query", 10),
         score_threshold=float(_optional("SCORE_THRESHOLD", str(settings.get("score_threshold", 6.0)))),
         groq_model=settings.get("groq_model", "llama-3.3-70b-versatile"),
+        consensus_models=settings.get("consensus_models", [settings.get("groq_model", "llama-3.3-70b-versatile")]),
         groq_temperature=settings.get("groq_temperature", 0.1),
         max_description_chars=settings.get("max_description_chars", 2000),
+        max_job_age_days=int(settings.get("max_job_age_days", 21)),
+        repost_cooldown_days=int(settings.get("repost_cooldown_days", 28)),
         log_level=_optional("LOG_LEVEL", "INFO"),
         seen_ids_path=SEEN_IDS_PATH,
     )

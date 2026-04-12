@@ -20,7 +20,7 @@ SCOPES = [
 JOBS_HEADER = [
     "Date Added", "Title", "Company", "Location",
     "Score", "Base Score", "German Req", "Penalty", 
-    "Tools Found", "Concerns", "Summary/Reasoning", "Apply Link", "Source",
+    "Tools Found", "Confidence", "Consensus Models", "Model Scores", "Concerns", "Summary/Reasoning", "Apply Link", "Source",
     "Status"
 ]
 
@@ -63,7 +63,10 @@ def _to_jobs_row(s: ScoredJob) -> List:
         s.base_score, 
         s.german_required, 
         s.german_penalty,
-        ", ".join(getattr(s, 'tools_found', [])), # Join list into string
+        ", ".join(s.tools_found),
+        s.confidence,
+        len(s.models_used),
+        ", ".join(str(x) for x in s.model_scores),
         s.concerns, 
         s.summary, 
         s.job.apply_link, 
