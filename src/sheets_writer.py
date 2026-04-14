@@ -16,11 +16,10 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-# Updated headers to match the new ScoredJob attributes
 JOBS_HEADER = [
     "Date Added", "Title", "Company", "Location",
-    "Score", "Base Score", "German Req", "Penalty", 
-    "Tools Found", "Confidence", "Consensus Models", "Model Scores", "Concerns", "Summary/Reasoning", "Apply Link", "Source",
+    "Score", "Base Score", "German Req", "Penalty",
+    "Tools Found", "Concerns", "Summary/Reasoning", "Apply Link", "Source",
     "Status"
 ]
 
@@ -52,28 +51,24 @@ def _ensure_header(ws: gspread.Worksheet, header: List[str]) -> None:
         logger.info(f"Header written to '{ws.title}'")
 
 def _to_jobs_row(s: ScoredJob) -> List:
-    """Maps the new ScoredJob attributes to the 'Jobs' sheet columns."""
     today = date.today().isoformat()
     return [
-        today, 
-        s.job.title, 
-        s.job.company, 
+        today,
+        s.job.title,
+        s.job.company,
         s.job.location,
-        s.score, 
-        s.base_score, 
-        s.german_required, 
+        s.score,
+        s.base_score,
+        s.german_required,
         s.german_penalty,
         ", ".join(s.tools_found),
-        s.confidence,
-        len(s.models_used),
-        ", ".join(str(x) for x in s.model_scores),
-        s.concerns, 
-        s.summary, 
-        s.job.apply_link, 
+        s.concerns,
+        s.summary,
+        s.job.apply_link,
         s.job.source,
-        "New" # Default Status
+        "New"
     ]
-
+    
 def _to_rejected_row(s: ScoredJob) -> List:
     """Maps the new ScoredJob attributes to the 'Rejected' sheet columns."""
     today = date.today().isoformat()
