@@ -11,9 +11,9 @@ https://www.loom.com/share/ce7214d173224063a2ae51292c4619c5
 
 Every weekday morning, the pipeline:
 
-1. **Fetches** fresh job listings from LinkedIn, Indeed, Glassdoor, and more via multiple JSearch APIs (aggregated, no scraping)
-2. **Deduplicates** against previously seen jobs so each listing is only scored once
-3. **Scores** each job on a 0–10 scale using an LLM (Groq / llama-3.3-70b-versatile) against a detailed candidate profile — title fit, tool overlap, seniority match
+1. **Fetches** fresh job listings from LinkedIn, Indeed, Glassdoor, and more via JSearch endpoint(s) (aggregated, no scraping)
+2. **Deduplicates + freshness-filters** against previously seen IDs, stale postings, and recent repost fingerprints
+3. **Scores** each job on a 0–10 scale using Groq models in consensus mode (average base score + confidence from score spread)
 4. **Appends** only jobs above the threshold to a shared Google Sheet for morning review
 
 The result: open your sheet each morning and see only pre-filtered, pre-reasoned opportunities.
@@ -27,20 +27,20 @@ GitHub Actions (cron 06:30 CET)
         │
         ▼
 ┌─────────────────────┐
-│   Job Fetcher       │  Multiple JSearch APIs (RapidAPI) — 5 queries/day, multiple pages per query
+│   Job Fetcher       │  JSearch (RapidAPI) endpoint(s) from fetcher.py
 │   fetcher.py        │  LinkedIn · Indeed · Glassdoor · StepStone · more
 └────────┬────────────┘
-         │ up to 50 raw jobs/day
+         │ raw jobs/day depends on query count and endpoint yield
          ▼
 ┌─────────────────────┐
-│   Deduplicator      │  Skips jobs already in seen_ids.json
-│   deduplicator.py   │  State committed back to repo after each run
+│   Deduplicator      │  Seen ID skip + stale age filter + repost cooldown
+│   deduplicator.py   │  seen_ids.json stores: job_ids + fingerprints
 └────────┬────────────┘
          │ new jobs only
          ▼
 ┌─────────────────────┐
-│   LLM Scorer        │  Groq (llama-3.3-70b-versatile)
-│   scorer.py         │  Returns score 0–10 + structured reasoning JSON
+│   LLM Scorer        │  Groq consensus_models (queries.yaml)
+│   scorer.py         │  Returns score + confidence + structured reasoning
 └────────┬────────────┘
          │ score ≥ threshold
          ▼
@@ -67,14 +67,14 @@ GitHub Actions (cron 06:30 CET)
    - Implements duplicate filtering within one run (same ID or title/company combo) and respects request delay.
 
 3. `src/deduplicator.py`
-   - Loads existing job IDs from `data/seen_ids.json`.
-   - Filters out previously processed jobs to avoid repeated scoring.
-   - Saves updated `seen_ids.json` at the end of each run.
+   - Loads existing state from `data/seen_ids.json` with backward compatibility.
+   - Filters out already-seen IDs, stale jobs (`max_job_age_days`), and recent reposts (`repost_cooldown_days`).
+   - Persists both ID and repost fingerprint state at the end of each run.
 
 4. `src/scorer.py`
-   - Sends each new job to Groq with a structured system/user prompt.
-   - Validates response JSON against `ScoredJobResponse` Pydantic model.
-   - Applies German proficiency penalty and threshold logic to derive `ScoredJob.score` and pass/fail status.
+   - Sends each new job to one or more Groq models (`consensus_models`).
+   - Validates each response JSON against the `ScoredJobResponse` Pydantic model.
+   - Builds a consensus output, computes confidence (`high|medium|low`) from score spread, then applies German penalty and threshold logic.
 
 5. `src/sheets_writer.py`
    - Connects to Google Sheets via service account JSON.
@@ -89,14 +89,15 @@ GitHub Actions (cron 06:30 CET)
 
 - `main.py` starts by calling `load_config()` from `src/config.py`.
 - `fetch_jobs(config)` pulls raw listings and structures them, then returns to `main`.
-- `load_seen_ids()` and `filter_new_jobs()` ensure only fresh jobs go to scoring.
+- `load_seen_state()` and `filter_new_jobs()` ensure only unseen, fresh, non-repost jobs go to scoring.
 - `score_jobs(new_jobs, config)` evaluates each new job and partitions to passed/rejected.
 - `append_jobs(passed, rejected, config)` writes outcomes to the spreadsheet.
-- Finally, `save_seen_ids()` persists all fetched job IDs (not only passed) to avoid reprocessing.
+- Finally, `save_seen_state()` persists all fetched job IDs plus repost fingerprints (not only passed jobs).
 
 **Result:** the pipeline always fetches the latest listings, dedups what you already reviewed, scores relevance automatically, and updates Google Sheets for quick daily decisioning.
 
-**Request budget:** 5 queries/day × 22 weekdays = ~110 requests/month (200/month cap on RapidAPI free tier)
+**Request budget (example):** requests/day is approximately `(#searches × #active_endpoints × pages_per_query)`.
+With the current default config (4 searches, 1 active endpoint, 1 page), this is about 88 requests/month on weekdays.
 
 ---
 
@@ -106,7 +107,7 @@ GitHub Actions (cron 06:30 CET)
 |---|---|
 | Orchestration | GitHub Actions (cron) |
 | Job data | JSearch via RapidAPI |
-| LLM scoring | Groq (llama-3.3-70b-versatile) |
+| LLM scoring | Groq (consensus-capable, model list in `queries.yaml`) |
 | Output | Google Sheets (gspread + service account) |
 | Language | Python 3.11 |
 | State persistence | JSON file committed to repo |
@@ -140,21 +141,23 @@ To ensure the system remains cost-effective, auditable, and technically robust, 
 job-pipeline/
 ├── .github/
 │   └── workflows/
-│       └── daily_fetch.yml     # Cron schedule, secret injection, commit-back
+│       └── main.yml           # Active workflow: cron, secret injection, commit-back
 ├── config/
 │   └── queries.yaml            # All search queries and settings — edit this
 ├── data/
-│   └── seen_ids.json           # Auto-updated: tracks processed job IDs
+│   ├── seen_ids.json           # Auto-updated: tracks processed job IDs + repost fingerprints
+│   ├── unmatched_jds.jsonl     # Auto-appended: JDs where requirements header was not detected
+│   └── no_result_api_calls.json # Auto-appended: successful API calls that returned 0 jobs
 ├── src/
 │   ├── config.py               # Env loader, settings dataclass
 │   ├── fetcher.py              # JSearch API wrapper → JobPost dataclass
-│   ├── deduplicator.py         # Load/save/filter seen IDs
-│   ├── scorer.py               # Groq prompt, JSON parsing → ScoredJob
+│   ├── deduplicator.py         # Load/save/filter seen IDs + repost fingerprints
+│   ├── scorer.py               # Groq scoring + consensus + confidence
 │   └── sheets_writer.py        # Auth, header setup, batch append
 ├── tests/                      # Unit tests (see Testing section)
 ├── main.py                     # Orchestrator — wires all stages together
 ├── requirements.txt
-└── .env.example
+└── daily_fetch.yml            # Optional/local workflow copy
 ```
 
 ---
@@ -168,8 +171,9 @@ git clone https://github.com/YOUR_USERNAME/job-pipeline.git
 cd job-pipeline
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
 ```
+
+Create a `.env` file manually in the project root.
 
 ### 2. Get API keys
 
@@ -194,6 +198,9 @@ RAPIDAPI_KEY=your_key
 GROQ_API_KEY=your_key
 GOOGLE_CREDENTIALS_JSON={"type":"service_account",...}
 SPREADSHEET_ID=your_sheet_id
+SHEET_NAME=Jobs
+SCORE_THRESHOLD=6.0
+LOG_LEVEL=INFO
 ```
 
 ### 5. Run locally
@@ -224,14 +231,35 @@ Edit `config/queries.yaml` to adjust search queries or scoring settings:
 ```yaml
 searches:
   - query: "data analyst"
-    location: "Berlin, Germany"
-    date_posted: "today"
+  - query: "analytics engineer"
 
 settings:
+  results_per_query: 10
   score_threshold: 6.0          # Raise to 7.0 for fewer, higher-quality results
-  groq_model: "llama-3.3-70b-versatile"
-  max_description_chars: 2000
+  groq_model: "meta-llama/llama-4-scout-17b-16e-instruct"
+  consensus_models:
+    - "meta-llama/llama-4-scout-17b-16e-instruct"
+    - "llama-3.3-70b-versatile"
+  groq_temperature: 0.1
+  max_description_chars: 3000
+  max_job_age_days: 21
+  repost_cooldown_days: 28
 ```
+
+## Dedup state format
+
+`data/seen_ids.json` now uses this structure:
+
+```json
+{
+  "job_ids": ["..."],
+  "fingerprints": {
+    "<sha1-fingerprint>": "YYYY-MM-DD"
+  }
+}
+```
+
+`job_ids` prevents reprocessing known IDs. `fingerprints` prevents quick reposts with new IDs.
 
 ---
 
