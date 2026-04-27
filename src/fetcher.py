@@ -245,18 +245,18 @@ def fetch_jobs(config: AppConfig) -> list[JobPost]:
     api_key = os.environ.get("RAPIDAPI_KEY")
 
     apis = [
-        #{
-        #    "name": "original",
-        #    "url": JSEARCH_URL,
-        #    "key": api_key,
-        #    "page": "1",
-        #    "host": "jsearch.p.rapidapi.com"
-        #},
+        {
+            "name": "original",
+            "url": JSEARCH_URL,
+            "key": api_key,
+            "page": "1",
+            "host": "jsearch.p.rapidapi.com"
+        },
         {
             "name": "jsearch-mega",
             "url": "https://jsearch-mega.p.rapidapi.com/search",
             "key": api_key,
-            "page": "1",
+            "page": "2",
             "host": "jsearch-mega.p.rapidapi.com"
         }
     ]
