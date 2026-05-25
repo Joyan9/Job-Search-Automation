@@ -10,7 +10,7 @@ searches:
 
 settings:
   results_per_query: 10
-  score_threshold: 6.0
+  score_threshold: 7.0
   groq_model: "meta-llama/llama-4-scout-17b-16e-instruct"  # 30K TPM vs 12K on 70b-versatile
   consensus_models:
     - "meta-llama/llama-4-scout-17b-16e-instruct"
