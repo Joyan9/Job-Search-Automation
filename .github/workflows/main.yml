@@ -1,11 +1,6 @@
 name: Daily Job Fetch
 
 on:
-  schedule:
-    # 06:30 Berlin time = 05:30 UTC (CET) / 04:30 UTC (CEST, summer)
-    # Using 05:30 UTC — adjust to 04:30 in summer if needed
-    - cron: "30 5 * * 1-5"   # Weekdays only (Mon–Fri)
-
   workflow_dispatch:           # Allow manual trigger from GitHub UI
 
 jobs:
